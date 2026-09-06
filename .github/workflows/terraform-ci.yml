@@ -114,6 +114,15 @@ jobs:
             -t lawal-cloud-platform:${{ github.sha }} \
             ./app
 
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297
+        with:
+          image-ref: lawal-cloud-platform:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
       - name: Verify container runs as non-root
         run: |
           USER_ID=$(docker run --rm \
