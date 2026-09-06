@@ -1,0 +1,28 @@
+digraph G {
+  rankdir = "RL";
+  node [shape = rect, fontname = "sans-serif"];
+  "data.google_compute_network.default" [label="data.google_compute_network.default"];
+  "google_compute_firewall.allow_http" [label="google_compute_firewall.allow_http"];
+  "google_compute_firewall.count_demo" [label="google_compute_firewall.count_demo"];
+  "google_compute_firewall.dynamic_demo" [label="google_compute_firewall.dynamic_demo"];
+  "google_compute_firewall.internal_services" [label="google_compute_firewall.internal_services"];
+  "google_compute_firewall.managed_demo" [label="google_compute_firewall.managed_demo"];
+  subgraph "cluster_module.compute_vm" {
+    label = "module.compute_vm"
+    fontname = "sans-serif"
+    "module.compute_vm.google_compute_instance.this" [label="google_compute_instance.this"];
+  }
+  subgraph "cluster_module.network" {
+    label = "module.network"
+    fontname = "sans-serif"
+    "module.network.google_compute_network.this" [label="google_compute_network.this"];
+    "module.network.google_compute_subnetwork.this" [label="google_compute_subnetwork.this"];
+  }
+  "google_compute_firewall.allow_http" -> "module.network.google_compute_network.this";
+  "google_compute_firewall.count_demo" -> "module.network.google_compute_subnetwork.this";
+  "google_compute_firewall.dynamic_demo" -> "module.network.google_compute_subnetwork.this";
+  "google_compute_firewall.internal_services" -> "module.network.google_compute_subnetwork.this";
+  "google_compute_firewall.managed_demo" -> "module.network.google_compute_subnetwork.this";
+  "module.compute_vm.google_compute_instance.this" -> "module.network.google_compute_subnetwork.this";
+  "module.network.google_compute_subnetwork.this" -> "module.network.google_compute_network.this";
+}

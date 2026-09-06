@@ -1,0 +1,392 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+      destructive_test:
+        description: "Test destructive-plan blocker"
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  terraform-checks:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks Secret Scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: ${{ github.workspace }}/gitleaks.toml
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.15.9"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
+        with:
+          tflint_version: latest
+
+      - name: Run TFLint
+        run: |
+          tflint --init
+          tflint --recursive
+
+      - name: Run Trivy Terraform Scan
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: config
+          scan-ref: .
+          exit-code: "1"
+          severity: "HIGH,CRITICAL"
+
+  dev-plan:
+    name: Terraform Dev Plan
+    runs-on: ubuntu-latest
+    needs: terraform-checks
+
+    if: >
+      (github.event_name == 'pull_request' && github.base_ref == 'main') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main' &&
+       inputs.environment == 'dev')
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_VAR_environment: dev
+      TF_VAR_instance_name: terraform-devops-vm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.15.9"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Select Dev Workspace
+        run: terraform workspace select default
+
+      - name: Terraform Dev Plan
+        run: terraform plan -input=false -no-color -lock-timeout=5m -out=dev.tfplan
+
+      - name: Upload Dev Plan
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terraform-dev-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dev.tfplan
+          retention-days: 1
+
+  prod-plan:
+    name: Terraform Prod Plan
+    runs-on: ubuntu-latest
+    needs: terraform-checks
+
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.environment == 'prod'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_WORKSPACE: prod
+      TF_VAR_environment: prod
+      TF_VAR_instance_name: terraform-prod-vm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PROD_PLAN_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.15.9"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Prod Plan
+        run: |
+          if [ "${{ inputs.destructive_test }}" = "true" ]; then
+            echo "Running SAFE destructive-plan test."
+
+            terraform plan \
+              -input=false \
+              -no-color \
+              -replace='google_compute_firewall.dynamic_demo' \
+              -out=prod.tfplan
+          else
+            terraform plan \
+              -input=false \
+              -no-color \
+              -lock-timeout=5m \
+              -out=prod.tfplan
+          fi
+
+      - name: Enforce Production Security Policy
+        run: |
+          terraform show -json prod.tfplan > prod-policy-plan.json
+
+          PUBLIC_IP_COUNT=$(jq '
+            [
+              .planned_values.root_module.child_modules[]?.resources[]?
+              | select(.type == "google_compute_instance")
+              | .values.network_interface[]?
+              | .access_config[]?
+            ]
+            | length
+          ' prod-policy-plan.json)
+
+          if [ "$PUBLIC_IP_COUNT" -gt 0 ]; then
+            echo "ERROR: Production VM has a public IP configuration."
+            exit 1
+          fi
+
+          echo "Production policy passed: no public VM IP detected."
+
+      - name: Enforce Production Deletion Protection
+        run: |
+          terraform show -json prod.tfplan > prod-deletion-policy.json
+
+          UNPROTECTED=$(jq '
+            [
+              .planned_values.root_module.child_modules[]?.resources[]?
+              | select(.type == "google_compute_instance")
+              | select(.values.deletion_protection != true)
+            ]
+            | length
+          ' prod-deletion-policy.json)
+
+          if [ "$UNPROTECTED" -gt 0 ]; then
+            echo "ERROR: Production VM deletion protection is not enabled."
+            exit 1
+          fi
+
+          echo "Production policy passed: deletion protection enabled."
+
+      - name: Enforce Production Naming Policy
+        run: |
+          terraform show -json prod.tfplan > prod-naming-policy.json
+
+          INVALID_NAMES=$(jq '
+            [
+              .planned_values.root_module.resources[]?,
+              .planned_values.root_module.child_modules[]?.resources[]?
+              | select(.values.name? != null)
+              | select((.values.name | contains("prod")) | not)
+            ]
+            | length
+          ' prod-naming-policy.json)
+
+          if [ "$INVALID_NAMES" -gt 0 ]; then
+            echo "ERROR: Production resource name does not contain prod."
+            exit 1
+          fi
+
+          echo "Production policy passed: resource naming is compliant."
+
+      - name: Block Destructive Prod Changes
+        run: |
+          terraform show -json prod.tfplan > prod-plan.json
+
+          if jq -e '
+            [
+              .resource_changes[]?
+              | select(.change.actions | index("delete"))
+            ]
+            | length > 0
+          ' prod-plan.json > /dev/null; then
+
+            echo "ERROR: Destructive Terraform actions detected in production plan."
+            echo "Affected resources:"
+
+            jq -r '
+              .resource_changes[]?
+              | select(.change.actions | index("delete"))
+              | "\(.address) -> \(.change.actions | join(","))"
+            ' prod-plan.json
+
+            exit 1
+          fi
+
+          echo "No destructive production actions detected."
+
+      - name: Upload Prod Plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terraform-prod-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prod.tfplan
+          retention-days: 1
+
+  dev-apply:
+    name: Terraform Dev Apply
+    runs-on: ubuntu-latest
+    needs:
+      - terraform-checks
+      - dev-plan
+
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.environment == 'dev'
+
+    environment:
+      name: dev-apply
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_VAR_environment: dev
+      TF_VAR_instance_name: terraform-devops-vm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_APPLY_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.15.9"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Select Dev Workspace
+        run: terraform workspace select default
+
+      - name: Download Dev Plan
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: terraform-dev-plan-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Terraform Dev Apply
+        run: terraform apply -input=false dev.tfplan
+
+  prod-apply:
+    name: Terraform Prod Apply
+    runs-on: ubuntu-latest
+    needs:
+      - terraform-checks
+      - prod-plan
+
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.environment == 'prod'
+
+    environment:
+      name: prod-apply
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_WORKSPACE: prod
+      TF_VAR_environment: prod
+      TF_VAR_instance_name: terraform-prod-vm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PROD_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4
+        with:
+          terraform_version: "1.15.9"
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Download Prod Plan
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: terraform-prod-plan-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Terraform Prod Apply
+        run: terraform apply -input=false prod.tfplan

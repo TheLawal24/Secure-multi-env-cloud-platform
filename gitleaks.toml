@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ci-canary-secret"
+description = "CI canary secret used to verify Gitleaks enforcement"
+regex = '''GITLEAKS_TEST_SECRET_[A-Z0-9]{16}'''
+tags = ["test", "ci"]
