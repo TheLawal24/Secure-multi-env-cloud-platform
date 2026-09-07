@@ -155,8 +155,7 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' &&
        github.ref == 'refs/heads/main' &&
-       inputs.environment == 'dev' &&
-       inputs.rollback_test == true)
+       inputs.environment == 'dev')
 
     permissions:
       contents: read
@@ -204,8 +203,7 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' &&
        github.ref == 'refs/heads/main' &&
-       inputs.environment == 'dev' &&
-       inputs.rollback_test == true)
+       inputs.environment == 'dev')
 
     permissions:
       contents: read
@@ -331,6 +329,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform-checks
 
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+
     if: >
       (github.event_name == 'pull_request' && github.base_ref == 'main') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -370,7 +371,46 @@ jobs:
         run: terraform workspace select default
 
       - name: Terraform Dev Plan
-        run: terraform plan -input=false -no-color -lock-timeout=5m -out=dev.tfplan
+        id: plan
+        shell: bash
+        run: |
+          set +e
+
+          terraform plan \
+            -input=false \
+            -no-color \
+            -lock-timeout=5m \
+            -detailed-exitcode \
+            -out=dev.tfplan
+
+          EXIT_CODE=$?
+          set -e
+
+          case "$EXIT_CODE" in
+            0)
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              echo "No infrastructure changes detected."
+              ;;
+            2)
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+              echo "Infrastructure changes detected."
+              ;;
+            *)
+              echo "Terraform plan failed with exit code $EXIT_CODE."
+              exit "$EXIT_CODE"
+              ;;
+          esac
+
+      - name: Record infrastructure deployment gate
+        if: github.event_name == 'push' && steps.plan.outputs.has_changes == 'true'
+        run: |
+          {
+            echo "## Infrastructure Deployment Gate"
+            echo ""
+            echo "Terraform detected infrastructure changes."
+            echo ""
+            echo "Automatic application deployment is blocked until the Dev Terraform Apply succeeds."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Dev Plan
         if: github.event_name == 'workflow_dispatch'
