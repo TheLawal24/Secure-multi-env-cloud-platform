@@ -51,10 +51,10 @@ def home():
 @app.route("/health")
 def health():
     return jsonify(
-        status="healthy",
+        status="unhealthy",
         environment=ENVIRONMENT,
         version=APP_VERSION,
-    ), 200
+    ), 500
 
 
 @app.route("/version")
