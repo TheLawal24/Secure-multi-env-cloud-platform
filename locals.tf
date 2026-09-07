@@ -2,9 +2,8 @@ locals {
   workspace_environment = terraform.workspace == "default" ? "dev" : terraform.workspace
 
   base_labels = {
-    deployment_gate_test = "true"
-    managed_by           = "terraform"
-    owner                = "devops-training"
+    managed_by = "terraform"
+    owner      = "devops-training"
   }
 
   environment_labels = {
