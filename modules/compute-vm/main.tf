@@ -9,6 +9,10 @@ resource "google_compute_instance" "this" {
   lifecycle {
     prevent_destroy = true
 
+    ignore_changes = [
+      metadata["ssh-keys"]
+    ]
+
     postcondition {
       condition     = self.current_status == "RUNNING"
       error_message = "The Compute Engine VM must be in RUNNING state."
