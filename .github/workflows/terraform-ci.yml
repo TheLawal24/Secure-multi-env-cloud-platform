@@ -270,14 +270,45 @@ jobs:
               fi
             "
 
-      - name: Verify deployed version
+      - name: Verify deployed application
         run: |
           gcloud compute ssh terraform-devops-vm \
             --zone=europe-west2-a \
             --project="${{ vars.GCP_PROJECT_ID }}" \
             --tunnel-through-iap \
             --quiet \
-            --command="curl -fsS http://localhost:8080/version"
+            --command="
+              set -e
+
+              echo 'Health endpoint:'
+              curl -fsS http://localhost:8080/health
+              echo
+
+              echo 'Version endpoint:'
+              curl -fsS http://localhost:8080/version
+              echo
+
+              DEPLOYED_VERSION=\$(curl -fsS http://localhost:8080/version | grep -o '${{ github.sha }}')
+
+              if [ \"\${DEPLOYED_VERSION}\" != '${{ github.sha }}' ]; then
+                echo 'ERROR: Deployed version does not match GitHub SHA.'
+                exit 1
+              fi
+
+              echo 'PASS: Deployed application matches GitHub SHA.'
+            "
+
+      - name: Record deployment summary
+        run: |
+          {
+            echo "## Dev Deployment"
+            echo ""
+            echo "- Environment: development"
+            echo "- VM: terraform-devops-vm"
+            echo "- Image SHA: \`${{ github.sha }}\`"
+            echo "- Registry: \`${{ vars.GAR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.APP_IMAGE_NAME }}\`"
+            echo "- Status: successful"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   dev-plan:
     name: Terraform Dev Plan
