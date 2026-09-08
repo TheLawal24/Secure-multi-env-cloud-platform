@@ -1,0 +1,7 @@
+---
+- name: Bootstrap cloud application hosts
+  hosts: all
+  become: true
+
+  roles:
+    - docker

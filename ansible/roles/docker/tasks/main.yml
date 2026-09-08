@@ -1,0 +1,26 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install Docker
+  ansible.builtin.apt:
+    name:
+      - docker.io
+    state: present
+  register: docker_install
+
+- name: Ensure Docker service is enabled and running
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+  when: not ansible_check_mode
+
+- name: Add deployment user to docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  when: not ansible_check_mode
