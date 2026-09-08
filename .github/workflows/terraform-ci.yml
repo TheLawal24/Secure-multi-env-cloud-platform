@@ -347,6 +347,7 @@ jobs:
       TF_IN_AUTOMATION: true
       TF_VAR_environment: dev
       TF_VAR_instance_name: terraform-devops-vm
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
 
     steps:
       - name: Checkout repository
@@ -439,6 +440,7 @@ jobs:
       TF_WORKSPACE: prod
       TF_VAR_environment: prod
       TF_VAR_instance_name: terraform-prod-vm
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
 
     steps:
       - name: Checkout repository
@@ -595,6 +597,7 @@ jobs:
       TF_IN_AUTOMATION: true
       TF_VAR_environment: dev
       TF_VAR_instance_name: terraform-devops-vm
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
 
     steps:
       - name: Checkout repository
@@ -650,6 +653,7 @@ jobs:
       TF_WORKSPACE: prod
       TF_VAR_environment: prod
       TF_VAR_instance_name: terraform-prod-vm
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
 
     steps:
       - name: Checkout repository
