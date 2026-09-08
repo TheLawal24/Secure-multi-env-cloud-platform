@@ -16,5 +16,7 @@ module "compute_vm" {
 
   labels = local.common_labels
 
+  service_account_email = google_service_account.runtime.email
+
   tags = ["terraform-lab"]
 }

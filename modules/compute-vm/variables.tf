@@ -68,3 +68,8 @@ variable "enable_public_ip" {
   type        = bool
   default     = false
 }
+
+variable "service_account_email" {
+  description = "Service account email attached to the Compute Engine instance"
+  type        = string
+}
