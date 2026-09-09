@@ -18,5 +18,5 @@ module "compute_vm" {
 
   service_account_email = google_service_account.runtime.email
 
-  tags = ["terraform-lab"]
+  tags = ["secure-cloud-platform"]
 }

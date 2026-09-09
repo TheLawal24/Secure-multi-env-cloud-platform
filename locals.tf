@@ -3,7 +3,7 @@ locals {
 
   base_labels = {
     managed_by = "terraform"
-    owner      = "devops-training"
+    owner      = "secure-cloud-platform"
   }
 
   environment_labels = {

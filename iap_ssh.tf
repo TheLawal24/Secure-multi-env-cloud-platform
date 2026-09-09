@@ -14,7 +14,7 @@ resource "google_compute_firewall" "iap_ssh" {
   }
 
   target_tags = [
-    "terraform-lab"
+    "secure-cloud-platform"
   ]
 
   description = "Allow SSH to managed VMs only through Google Cloud IAP"
