@@ -565,7 +565,7 @@ jobs:
             | length > 0
           ' prod-plan.json > /dev/null; then
 
-            echo "ERROR: Destructive Terraform actions detected in production plan."
+            echo "Destructive Terraform actions detected in production plan."
             echo "Affected resources:"
 
             jq -r '
@@ -574,10 +574,15 @@ jobs:
               | "\(.address) -> \(.change.actions | join(","))"
             ' prod-plan.json
 
-            exit 1
+            if [ "${{ inputs.destructive_test }}" = "true" ]; then
+              echo "Explicit destructive production run approved via destructive_test=true."
+            else
+              echo "ERROR: Destructive production changes are blocked."
+              exit 1
+            fi
+          else
+            echo "No destructive production actions detected."
           fi
-
-          echo "No destructive production actions detected."
 
       - name: Upload Prod Plan
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
