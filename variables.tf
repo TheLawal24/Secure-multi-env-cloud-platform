@@ -40,7 +40,7 @@ variable "environment_config" {
     staging = {
       machine_type = "e2-small"
       disk_size    = 20
-      subnet_cidr  = "10.30.0.0/24"
+      subnet_cidr  = "10.20.0.0/24"
     }
 
     prod = {
