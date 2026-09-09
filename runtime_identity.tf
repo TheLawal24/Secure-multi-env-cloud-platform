@@ -1,5 +1,5 @@
 resource "google_service_account" "runtime" {
-  account_id   = "secure-platform-${var.environment}-runtime"
+  account_id   = var.environment == "staging" ? "secure-platform-stg-runtime" : "secure-platform-${var.environment}-runtime"
   display_name = "Secure Cloud Platform ${title(var.environment)} Runtime"
 
   description = "Least-privilege runtime identity for ${var.environment} application workloads"
