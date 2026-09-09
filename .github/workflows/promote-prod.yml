@@ -1,0 +1,245 @@
+name: Promote Application to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Exact Git SHA already deployed and verified in Dev"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  verify-dev:
+    name: Verify Dev Release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      image_sha: ${{ steps.validate.outputs.image_sha }}
+
+    steps:
+      - name: Validate immutable image SHA
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_SHA="${{ inputs.image_sha }}"
+
+          if [[ ! "$IMAGE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: image_sha must be an exact 40-character Git commit SHA."
+            exit 1
+          fi
+
+          echo "Validated SHA: $IMAGE_SHA"
+          echo "image_sha=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate for Dev verification
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_APPLY_SERVICE_ACCOUNT }}
+
+      - name: Verify immutable image exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE="${{ vars.GAR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.APP_IMAGE_NAME }}:${{ steps.validate.outputs.image_sha }}"
+
+          echo "Verifying image:"
+          echo "$IMAGE"
+
+          gcloud artifacts docker images describe "$IMAGE" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --format="value(image_summary.digest)"
+
+          echo "PASS: immutable image exists in Artifact Registry."
+
+      - name: Verify SHA is deployed and healthy in Dev
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_SHA="${{ steps.validate.outputs.image_sha }}"
+
+          gcloud compute ssh terraform-devops-vm \
+            --zone=europe-west2-a \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --tunnel-through-iap \
+            --quiet \
+            --command="
+              set -e
+
+              echo 'Checking Dev health...'
+              curl -fsS http://localhost:8080/health
+              echo
+
+              echo 'Checking Dev version...'
+              VERSION_RESPONSE=\$(curl -fsS http://localhost:8080/version)
+              echo \"\${VERSION_RESPONSE}\"
+
+              echo \"\${VERSION_RESPONSE}\" | grep -q '${IMAGE_SHA}'
+
+              echo 'PASS: requested SHA is currently deployed and healthy in Dev.'
+            "
+
+  deploy-prod:
+    name: Deploy Application to Production
+    runs-on: ubuntu-latest
+    needs:
+      - verify-dev
+
+    environment:
+      name: prod-apply
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PROD_SERVICE_ACCOUNT }}
+
+      - name: Deploy exact Dev-tested image to Prod
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_SHA="${{ needs.verify-dev.outputs.image_sha }}"
+          IMAGE="${{ vars.GAR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.APP_IMAGE_NAME }}:${IMAGE_SHA}"
+
+          gcloud compute ssh terraform-prod-vm \
+            --zone=europe-west2-a \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --tunnel-through-iap \
+            --quiet \
+            --command="
+              set -euo pipefail
+
+              IMAGE='${IMAGE}'
+              IMAGE_SHA='${IMAGE_SHA}'
+              REGISTRY='${{ vars.GAR_LOCATION }}-docker.pkg.dev'
+
+              echo 'Obtaining short-lived token from Prod VM runtime identity...'
+
+              ACCESS_TOKEN=\$(curl -fsS \
+                -H 'Metadata-Flavor: Google' \
+                http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+                | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"access_token\"])')
+
+              echo \"\${ACCESS_TOKEN}\" | sudo docker login \
+                -u oauth2accesstoken \
+                --password-stdin \
+                https://\${REGISTRY}
+
+              PREVIOUS_IMAGE=\$(sudo docker inspect \
+                --format='{{.Config.Image}}' \
+                lawal-cloud-platform 2>/dev/null || true)
+
+              echo \"Previous production image: \${PREVIOUS_IMAGE:-none}\"
+              echo \"Promoting Dev-tested image: \${IMAGE}\"
+
+              sudo docker pull \"\${IMAGE}\"
+
+              sudo docker rm -f lawal-cloud-platform 2>/dev/null || true
+
+              sudo docker run -d \
+                --name lawal-cloud-platform \
+                --restart unless-stopped \
+                -p 8080:8080 \
+                -e APP_ENV=production \
+                -e APP_VERSION=\"\${IMAGE_SHA}\" \
+                \"\${IMAGE}\"
+
+              echo 'Waiting for production application startup...'
+              sleep 10
+
+              if curl -fsS http://localhost:8080/health; then
+                echo
+                echo 'PASS: Production deployment health check succeeded.'
+              else
+                echo
+                echo 'ERROR: Production deployment health check failed.'
+
+                sudo docker logs lawal-cloud-platform || true
+                sudo docker rm -f lawal-cloud-platform || true
+
+                if [ -n \"\${PREVIOUS_IMAGE}\" ]; then
+                  echo \"Rolling back to \${PREVIOUS_IMAGE}\"
+
+                  sudo docker pull \"\${PREVIOUS_IMAGE}\" || true
+
+                  sudo docker run -d \
+                    --name lawal-cloud-platform \
+                    --restart unless-stopped \
+                    -p 8080:8080 \
+                    -e APP_ENV=production \
+                    -e APP_VERSION=rollback \
+                    \"\${PREVIOUS_IMAGE}\"
+
+                  sleep 10
+
+                  echo 'Rollback health check:'
+                  curl -fsS http://localhost:8080/health || true
+                else
+                  echo 'WARNING: No previous production image was available for rollback.'
+                fi
+
+                exit 1
+              fi
+            "
+
+      - name: Verify production release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_SHA="${{ needs.verify-dev.outputs.image_sha }}"
+
+          gcloud compute ssh terraform-prod-vm \
+            --zone=europe-west2-a \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --tunnel-through-iap \
+            --quiet \
+            --command="
+              set -e
+
+              echo 'Production health endpoint:'
+              curl -fsS http://localhost:8080/health
+              echo
+
+              echo 'Production version endpoint:'
+              VERSION_RESPONSE=\$(curl -fsS http://localhost:8080/version)
+              echo \"\${VERSION_RESPONSE}\"
+
+              echo \"\${VERSION_RESPONSE}\" | grep -q '${IMAGE_SHA}'
+
+              echo 'PASS: Production is running the exact promoted Git SHA.'
+            "
+
+      - name: Record production release summary
+        shell: bash
+        run: |
+          {
+            echo "## Production Promotion"
+            echo ""
+            echo "- Environment: production"
+            echo "- VM: terraform-prod-vm"
+            echo "- Image SHA: \`${{ needs.verify-dev.outputs.image_sha }}\`"
+            echo "- Registry: \`${{ vars.GAR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.APP_IMAGE_NAME }}\`"
+            echo "- Build performed during promotion: **No**"
+            echo "- Dev verification: **Passed**"
+            echo "- Production health check: **Passed**"
+            echo "- Production version verification: **Passed**"
+          } >> "$GITHUB_STEP_SUMMARY"
