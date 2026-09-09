@@ -5,7 +5,5 @@ locals {
 
   allow_http_name = var.environment == "dev" ? "terraform-allow-http" : "terraform-${var.environment}-allow-http"
 
-  internal_firewall_prefix = var.environment == "dev" ? "terraform-internal" : "terraform-${var.environment}-internal"
 
-  count_firewall_prefix = var.environment == "dev" ? "terraform-count-port" : "terraform-${var.environment}-count-port"
 }
