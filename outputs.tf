@@ -2,9 +2,6 @@ output "instance_name" {
   value = module.compute_vm.name
 }
 
-output "external_ip" {
-  value = module.compute_vm.external_ip
-}
 
 output "internal_ip" {
   value = module.compute_vm.internal_ip
