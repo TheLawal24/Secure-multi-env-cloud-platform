@@ -235,8 +235,6 @@ jobs:
 
           IMAGE="${{ vars.GAR_LOCATION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GAR_REPOSITORY }}/${{ vars.APP_IMAGE_NAME }}:${{ github.sha }}"
 
-          ACCESS_TOKEN="$(gcloud auth print-access-token)"
-
           gcloud compute ssh terraform-devops-vm \
             --zone=europe-west2-a \
             --project="${{ vars.GCP_PROJECT_ID }}" \
@@ -245,7 +243,12 @@ jobs:
             --command="
               set -e
 
-              echo '${ACCESS_TOKEN}' | sudo docker login \
+              ACCESS_TOKEN=\$(curl -fsS \
+                -H 'Metadata-Flavor: Google' \
+                'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' \
+                | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+              echo \"\${ACCESS_TOKEN}\" | sudo docker login \
                 -u oauth2accesstoken \
                 --password-stdin \
                 https://${{ vars.GAR_LOCATION }}-docker.pkg.dev
