@@ -246,7 +246,7 @@ jobs:
               ACCESS_TOKEN=\$(curl -fsS \
                 -H 'Metadata-Flavor: Google' \
                 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' \
-                | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+                | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"access_token\"])')
 
               echo \"\${ACCESS_TOKEN}\" | sudo docker login \
                 -u oauth2accesstoken \
