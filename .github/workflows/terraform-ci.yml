@@ -704,7 +704,7 @@ jobs:
         run: terraform workspace select default
 
       - name: Download Dev Plan
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: terraform-dev-plan-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -757,7 +757,7 @@ jobs:
         run: terraform init -input=false
 
       - name: Download Prod Plan
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: terraform-prod-plan-${{ github.run_id }}-${{ github.run_attempt }}
 
